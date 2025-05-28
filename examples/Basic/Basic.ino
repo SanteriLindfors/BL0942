@@ -1,7 +1,7 @@
 #include <BL0942.h>
 
-#define BL0942_RX 16  
-#define BL0942_TX 17  
+#define BL0942_RX 19  
+#define BL0942_TX 18  
 
 bl0942::BL0942 blSensor(Serial1);
 
@@ -24,7 +24,6 @@ void setup() {
 
   blSensor.setup();  // Use default ModeConfig
   blSensor.onDataReceived(dataReceivedCallback);
-  blSensor.update(); 
 }
 
 void loop() {

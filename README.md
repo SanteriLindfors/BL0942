@@ -38,22 +38,18 @@ Constructs a new BL0942 driver instance.
 
 > Note: You must call Serial1.begin() yourself before using this library.
 
-##### `void setup(const ModeConfig &config = ModeConfig{})`
-Configures the sensor with the provided `ModeConfig` parameters.
 
-This writes the sensor's operating mode, update frequency, accumulation mode, and UART rate. Use this to initialize the sensor after powering on.
+
+####  `void setup(const ModeConfig &config = ModeConfig{})`
+
+Configures the BL0942 sensor by writing a configuration packet to its internal registers. This setup includes frequency, waveform selection, UART speed, and data clearing behavior.
+
 ```cpp
 bl0942::ModeConfig cfg;
 cfg.uart_rate = bl0942::UART_RATE_19200;
 cfg.ac_freq = bl0942::LINE_FREQUENCY_60HZ;
 blSensor.setup(cfg);
 ```
-
-###  `void setup(const ModeConfig &config = ModeConfig{})`
-
-Initializes and configures the BL0942 sensor by writing a configuration packet to its internal registers. This setup includes frequency, waveform selection, UART speed, and data clearing behavior.
-
-This must be called after powering on the device and before reading any measurements.
 
 #### Parameters (`ModeConfig`)
 
@@ -104,8 +100,8 @@ Reads and prints all key registers from the BL0942 for debugging and diagnostics
 ```cpp
 #include <BL0942.h>
 
-#define BL0942_RX 16  
-#define BL0942_TX 17  
+#define BL0942_RX 19  
+#define BL0942_TX 18  
 
 bl0942::BL0942 blSensor(Serial1);
 
@@ -128,12 +124,11 @@ void setup() {
 
   blSensor.setup();  // Use default ModeConfig
   blSensor.onDataReceived(dataReceivedCallback);
-  blSensor.update(); 
 }
 
 void loop() {
   blSensor.update();
   blSensor.loop(); 
-  delay(1000);
+  delay(3000);
 }
 ```

@@ -1,7 +1,9 @@
-BL0942                Keyword1
-SensorData            Keyword2
-ModeConfig            Keyword2
-setup                 Keyword2
-loop                  Keyword2
-update                Keyword2
-onDataReceived        Keyword2
+BL0942	KEYWORD1
+SensorData	KEYWORD2
+ModeConfig	KEYWORD2
+setup	KEYWORD2
+reset	KEYWORD2
+loop	KEYWORD2
+update	KEYWORD2
+onDataReceived	KEYWORD2
+print_registers	KEYWORD2
