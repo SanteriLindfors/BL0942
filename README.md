@@ -75,12 +75,57 @@ struct ModeConfig {
 | `accumulation_mode` | Use algebraic (signed) or absolute energy accumulation.                     |
 | `uart_rate`         | UART baud rate (4800, 9600, 19200, 38400). Must match your `Serial.begin()`. |
 
+##### Energy Reading Mode
+
+BL0942 supports two energy counting modes controlled by the `clear_mode` setting in `ModeConfig`:
+
+| Mode                    | Description                                                                 |
+|-------------------------|-----------------------------------------------------------------------------|
+| `CNT_CLR_SEL_ENABLE`    | The energy counter is **cleared after each read**. Sensor returns **ΔE** (delta energy) since last read. |
+| `CNT_CLR_SEL_DISABLE`   | The energy counter is **never cleared**, and value accumulates forever. Sensor returns **total ∫P** (integrated total energy).  |
+
+You can choose the behavior in your `ModeConfig`:
+
+```cpp
+bl0942::ModeConfig cfg;
+cfg.clear_mode = bl0942::CNT_CLR_SEL_ENABLE;  // For delta energy
+// or
+cfg.clear_mode = bl0942::CNT_CLR_SEL_DISABLE; // For total energy
+
+blSensor.setup(cfg);
+```
+
 
 ##### `void reset()`
 Performs a soft reset of the BL0942 sensor, restoring internal configuration to factory defaults.
 
 ##### `void onDataReceived(OnDataReceivedCallback callback)`
 Registers a callback function that will be triggered when new sensor data is received and successfully parsed.
+
+The `SensorData` struct is passed to your callback whenever new data is received from the BL0942 sensor. It contains the most recent measurement values:
+
+```cpp
+struct SensorData {
+  float voltage;   // Voltage RMS in volts
+  float current;   // Current RMS in amperes
+  float watt;      // Active power in watts
+  float energy;    // Energy in kilowatt-hours (kWh)
+  float frequency; // Line frequency in Hz
+};
+```
+The value of `SensorData.energy` depends on the `clear_mode` configured in `ModeConfig` during `setup()`:
+
+| `clear_mode` Setting     | `SensorData.energy` Value                                      |
+|--------------------------|---------------------------------------------------------------|
+| `CNT_CLR_SEL_ENABLE`     | **ΔE** — Energy (kWh) accumulated since the last update       |
+| `CNT_CLR_SEL_DISABLE`    | **∫P** — Total accumulated energy (kWh) since boot            |
+
+This means:
+
+- If you're using `CNT_CLR_SEL_ENABLE`, you get the **energy accumulated between each update request**.
+- If using `CNT_CLR_SEL_DISABLE`, the value will **accumulate indefinitely** (or until the device resets).
+
+
 
 ```cpp
 blSensor.onDataReceived([](bl0942::SensorData &data) {

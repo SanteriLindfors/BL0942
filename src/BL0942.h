@@ -22,7 +22,9 @@ struct SensorData {
   float voltage;   // Voltage RMS
   float current;   // Current RMS
   float watt;      // Power in watts
-  float energy;    // Total energy consumption in kWh
+  float energy;    // Energy in kWh:
+                   // - If CNT_CLR_SEL_ENABLE → delta since last read
+                   // - If CNT_CLR_SEL_DISABLE → total accumulated
   float frequency; // Frequency in Hz
 };
 
@@ -84,11 +86,11 @@ public:
 protected:
   struct DataPacket {
     uint8_t frame_header;
-    uint32_t i_rms : 24;      // Only take lower 24 bits
-    uint32_t v_rms : 24;      // Only take lower 24 bits
-    uint32_t i_fast_rms : 24; // Only take lower 24 bits
-    int32_t watt : 24;        // Only take lower 24 bits
-    uint32_t cf_cnt : 24;     // Only take lower 24 bits
+    uint32_t i_rms : 24;
+    uint32_t v_rms : 24;
+    uint32_t i_fast_rms : 24;
+    int32_t watt : 24;
+    uint32_t cf_cnt : 24;
     uint16_t frequency;
     uint8_t reserved1;
     uint8_t status;
@@ -100,6 +102,7 @@ protected:
   HardwareSerial &serial_;
   OnDataReceivedCallback dataCallback;
   uint8_t address_;
+  bool use_delta_energy_;
   uint32_t prev_cf_cnt_ = 0;
 
   int read_reg_(uint8_t reg);

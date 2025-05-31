@@ -92,6 +92,7 @@ BL0942::BL0942(HardwareSerial &serial, uint8_t address)
 
 void BL0942::setup(const ModeConfig &config) {
   BL0942_LOGI(TAG, "Initializing BL0942 sensor...");
+  use_delta_energy_ = config.clear_mode == CNT_CLR_SEL_ENABLE ? true : false;
 
   write_reg_(BL0942_REG_USR_WRPROT, BL0942_REG_USR_WRPROT_MAGIC);
 
@@ -169,12 +170,15 @@ void BL0942::received_package_(DataPacket *data) {
     return;
   }
 
-  uint32_t cf_cnt = data->cf_cnt;
-  cf_cnt |= this->prev_cf_cnt_ & 0xff000000;
-  if (cf_cnt < this->prev_cf_cnt_) {
-    cf_cnt += 0x1000000;
+  uint32_t cf_cnt = data->cf_cnt & 0x00FFFFFF;
+
+  if (!use_delta_energy_) {
+    cf_cnt |= this->prev_cf_cnt_ & 0xff000000;
+    if (cf_cnt < this->prev_cf_cnt_) {
+      cf_cnt += 0x1000000;
+    }
+    this->prev_cf_cnt_ = cf_cnt;
   }
-  this->prev_cf_cnt_ = cf_cnt;
 
   SensorData sensorData;
   sensorData.voltage = data->v_rms / BL0942_UREF;
@@ -184,9 +188,10 @@ void BL0942::received_package_(DataPacket *data) {
   sensorData.frequency = 1000000.0f / data->frequency;
 
   BL0942_LOGI(TAG,
-              "BL0942: U %fV, I %fA, P %fW, Cnt %" PRId32
-              ", ∫P %fkWh, frequency %fHz, status 0x%08X",
-              sensorData.voltage, sensorData.current, sensorData.watt, cf_cnt,
+              "BL0942: U %fV, I %fA, P %fW, Cnt %lu, %s %fkWh, "
+              "freq %fHz, status 0x%08X",
+              sensorData.voltage, sensorData.current, sensorData.watt,
+              data->cf_cnt, (use_delta_energy_ ? "ΔE" : "Total ∫P"),
               sensorData.energy, sensorData.frequency, data->status);
 
   if (dataCallback) {
