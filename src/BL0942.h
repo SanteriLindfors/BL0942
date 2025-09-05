@@ -7,6 +7,8 @@ UART.
 #pragma once
 
 #include <Arduino.h>
+#include <functional>
+#include <SPI.h>
 
 namespace bl0942 {
 
@@ -73,7 +75,13 @@ class BL0942 {
 public:
   using OnDataReceivedCallback = std::function<void(SensorData &data)>;
 
+  enum InterfaceType : uint8_t { INTERFACE_UART = 0, INTERFACE_SPI = 1 };
+
+  // UART constructor (default)
   BL0942(HardwareSerial &serial, uint8_t address = 0);
+
+  // SPI constructor: provide SPI instance and CS pin
+  BL0942(SPIClass &spi, uint8_t cs_pin, uint8_t address = 0);
   void setup(const ModeConfig &config = ModeConfig{});
   void reset();
 
@@ -100,12 +108,18 @@ protected:
   } __attribute__((packed));
 
   HardwareSerial &serial_;
+  SPIClass *spi_;
   OnDataReceivedCallback dataCallback;
   uint8_t address_;
+  uint8_t cs_pin_;
+  InterfaceType interface_;
   bool use_delta_energy_;
   uint32_t prev_cf_cnt_ = 0;
 
+  // transport helpers: these use the selected interface
   int read_reg_(uint8_t reg);
+  int transport_read_(uint8_t *buf, size_t len);
+  void transport_write_(const uint8_t *buf, size_t len);
   void write_reg_(uint8_t reg, uint32_t val);
   bool validate_checksum_(DataPacket *data);
   void received_package_(DataPacket *data);

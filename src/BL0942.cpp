@@ -88,7 +88,10 @@ static const uint32_t BL0942_REG_SOFT_RESET_MAGIC = 0x5a5a5a;
 static const uint32_t BL0942_REG_USR_WRPROT_MAGIC = 0x55;
 
 BL0942::BL0942(HardwareSerial &serial, uint8_t address)
-    : serial_(serial), address_(address_) {}
+  : serial_(serial), spi_(nullptr), address_(address), cs_pin_(0), interface_(INTERFACE_UART) {}
+
+BL0942::BL0942(SPIClass &spi, uint8_t cs_pin, uint8_t address)
+  : serial_(*(HardwareSerial *)nullptr), spi_(&spi), address_(address), cs_pin_(cs_pin), interface_(INTERFACE_SPI) {}
 
 void BL0942::setup(const ModeConfig &config) {
   BL0942_LOGI(TAG, "Initializing BL0942 sensor...");
@@ -116,34 +119,46 @@ void BL0942::setup(const ModeConfig &config) {
 }
 
 void BL0942::reset() {
-  BL0942_LOGI(TAG, "Resetting BL0942 sensor...");
-
-  write_reg_(BL0942_REG_USR_WRPROT, BL0942_REG_USR_WRPROT_MAGIC);
+  BL0942_LOGI(TAG, "Resetting BL0942 sensor (soft reset)...");
+  // Trigger soft reset via register write
   write_reg_(BL0942_REG_SOFT_RESET, BL0942_REG_SOFT_RESET_MAGIC);
+  // small delay to allow device to reset
+  delay(10);
 }
 
 bool BL0942::loop() {
   DataPacket buffer;
-  int avail = serial_.available();
 
-  if (avail < sizeof(buffer)) {
+  if (interface_ == INTERFACE_UART) {
+    int avail = serial_.available();
+    if (avail < (int)sizeof(buffer)) {
+      return false;
+    }
+
+    if (serial_.readBytes(reinterpret_cast<uint8_t *>(&buffer), sizeof(buffer)) !=
+        (int)sizeof(buffer)) {
+      BL0942_LOGW(TAG, "Failed to read the full data packet.");
+      return false;
+    }
+  } else { // SPI
+    uint8_t tx[2] = {BL0942_READ_COMMAND | this->address_, BL0942_FULL_PACKET};
+    transport_write_(tx, 2);
+    if (transport_read_(reinterpret_cast<uint8_t *>(&buffer), sizeof(buffer)) != (int)sizeof(buffer)) {
+      BL0942_LOGW(TAG, "Failed to read the full data packet (SPI).");
+      return false;
+    }
+  }
+
+  BL0942_LOGD(TAG, "Received data packet, validating checksum...");
+
+  if (validate_checksum_(&buffer)) {
+    BL0942_LOGD(TAG, "Checksum valid, processing data...");
+    received_package_(&buffer);
+    return true;
+  } else {
+    BL0942_LOGW(TAG, "Checksum invalid, ignoring packet.");
     return false;
   }
-
-  if (serial_.readBytes(reinterpret_cast<uint8_t *>(&buffer), sizeof(buffer)) ==
-      sizeof(buffer)) {
-    BL0942_LOGD(TAG, "Received data packet, validating checksum...");
-    if (validate_checksum_(&buffer)) {
-      BL0942_LOGD(TAG, "Checksum valid, processing data...");
-      received_package_(&buffer);
-      return true;
-    } else {
-      BL0942_LOGW(TAG, "Checksum invalid, ignoring packet.");
-    }
-  } else {
-    BL0942_LOGW(TAG, "Failed to read the full data packet.");
-  }
-  return false;
 }
 
 bool BL0942::validate_checksum_(DataPacket *data) {
@@ -204,9 +219,8 @@ void BL0942::onDataReceived(OnDataReceivedCallback callback) {
 }
 
 void BL0942::update() {
-  serial_.write(BL0942_READ_COMMAND | this->address_);
-  serial_.write(BL0942_FULL_PACKET);
-  serial_.flush();
+  uint8_t tx[2] = {BL0942_READ_COMMAND | this->address_, BL0942_FULL_PACKET};
+  transport_write_(tx, sizeof(tx));
 }
 
 void BL0942::write_reg_(uint8_t reg, uint32_t val) {
@@ -225,8 +239,7 @@ void BL0942::write_reg_(uint8_t reg, uint32_t val) {
       TAG,
       "Packet to be sent: [0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X]",
       pkt[0], pkt[1], pkt[2], pkt[3], pkt[4], pkt[5]);
-  serial_.write(pkt, 6);
-  serial_.flush();
+  transport_write_(pkt, 6);
 }
 
 int BL0942::read_reg_(uint8_t reg) {
@@ -235,11 +248,10 @@ int BL0942::read_reg_(uint8_t reg) {
     uint32_t le32;
   } resp;
 
-  serial_.write(BL0942_READ_COMMAND | this->address_);
-  serial_.write(reg);
-  serial_.flush();
+  uint8_t tx[2] = {BL0942_READ_COMMAND | this->address_, reg};
+  transport_write_(tx, 2);
 
-  int bytesRead = serial_.readBytes(resp.b, 4);
+  int bytesRead = transport_read_(resp.b, 4);
 
   if (bytesRead == 4) {
     if (resp.b[3] == (uint8_t)((BL0942_READ_COMMAND + this->address_ + reg +
@@ -255,6 +267,35 @@ int BL0942::read_reg_(uint8_t reg) {
   }
 
   return -1;
+}
+
+int BL0942::transport_read_(uint8_t *buf, size_t len) {
+  if (interface_ == INTERFACE_UART) {
+    return serial_.readBytes(buf, len);
+  } else {
+    // SPI: perform a blocking transfer. CS active low
+    if (!spi_) return -1;
+    digitalWrite(cs_pin_, LOW);
+    for (size_t i = 0; i < len; ++i) {
+      buf[i] = spi_->transfer(0x00);
+    }
+    digitalWrite(cs_pin_, HIGH);
+    return (int)len;
+  }
+}
+
+void BL0942::transport_write_(const uint8_t *buf, size_t len) {
+  if (interface_ == INTERFACE_UART) {
+    serial_.write(buf, len);
+    serial_.flush();
+  } else {
+    if (!spi_) return;
+    digitalWrite(cs_pin_, LOW);
+    for (size_t i = 0; i < len; ++i) {
+      spi_->transfer(buf[i]);
+    }
+    digitalWrite(cs_pin_, HIGH);
+  }
 }
 
 void BL0942::print_registers() {
