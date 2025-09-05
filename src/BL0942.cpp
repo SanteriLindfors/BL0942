@@ -95,9 +95,13 @@ BL0942::BL0942(HardwareSerial &serial, uint8_t address)
 
 BL0942::BL0942(SPIClass &spi, uint8_t cs_pin, uint8_t address)
   : serial_(nullptr), spi_(&spi), address_(address), cs_pin_(cs_pin), interface_(INTERFACE_SPI) {
-  // Ensure CS pin is configured high (inactive)
-  pinMode(cs_pin_, OUTPUT);
-  digitalWrite(cs_pin_, HIGH);
+  // If user provided a CS pin, configure it high (inactive). If cs_pin_ is
+  // 0xFF we treat it as 'no CS managed' and leave selection to the
+  // user-provided ChannelSelector.
+  if (cs_pin_ != 0xFF) {
+    pinMode(cs_pin_, OUTPUT);
+    digitalWrite(cs_pin_, HIGH);
+  }
 }
 
 void BL0942::setup(const ModeConfig &config) {
@@ -123,6 +127,17 @@ void BL0942::setup(const ModeConfig &config) {
   }
 
   write_reg_(BL0942_REG_USR_WRPROT, 0);
+}
+
+void BL0942::setChannelSelector(ChannelSelector selector) {
+  channelSelector_ = selector;
+}
+
+// Fully-qualified definition to avoid any lookup/mangling issues
+void bl0942::BL0942::ensure_channel_selected_(bool active) {
+  if (channelSelector_) {
+    channelSelector_(address_, active);
+  }
 }
 
 void BL0942::reset() {
@@ -278,17 +293,24 @@ int BL0942::read_reg_(uint8_t reg) {
 
 int BL0942::transport_read_(uint8_t *buf, size_t len) {
   if (interface_ == INTERFACE_UART) {
-  return serial_->readBytes(buf, len);
+    return serial_->readBytes(buf, len);
   } else {
-    // SPI: perform a blocking transfer. CS active low
     if (!spi_) return -1;
     SPISettings settings(BL0942_SPI_CLOCK_HZ, MSBFIRST, BL0942_SPI_MODE);
     spi_->beginTransaction(settings);
-    digitalWrite(cs_pin_, LOW);
+    if (channelSelector_)
+      ensure_channel_selected_(true);
+    else
+      digitalWrite(cs_pin_, LOW);
+    
     for (size_t i = 0; i < len; ++i) {
       buf[i] = spi_->transfer(0x00);
     }
-    digitalWrite(cs_pin_, HIGH);
+    
+    if (channelSelector_)
+      ensure_channel_selected_(false);
+    else
+      digitalWrite(cs_pin_, HIGH);
     spi_->endTransaction();
     return (int)len;
   }
@@ -296,17 +318,25 @@ int BL0942::transport_read_(uint8_t *buf, size_t len) {
 
 void BL0942::transport_write_(const uint8_t *buf, size_t len) {
   if (interface_ == INTERFACE_UART) {
-  serial_->write(buf, len);
-  serial_->flush();
+    serial_->write(buf, len);
+    serial_->flush();
   } else {
     if (!spi_) return;
     SPISettings settings(BL0942_SPI_CLOCK_HZ, MSBFIRST, BL0942_SPI_MODE);
     spi_->beginTransaction(settings);
-    digitalWrite(cs_pin_, LOW);
+    if (channelSelector_)
+      ensure_channel_selected_(true);
+    else
+      digitalWrite(cs_pin_, LOW);
+    
     for (size_t i = 0; i < len; ++i) {
       spi_->transfer(buf[i]);
     }
-    digitalWrite(cs_pin_, HIGH);
+
+    if (channelSelector_)
+      ensure_channel_selected_(false);
+    else
+      digitalWrite(cs_pin_, HIGH);
     spi_->endTransaction();
   }
 }

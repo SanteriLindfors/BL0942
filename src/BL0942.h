@@ -74,14 +74,24 @@ struct ModeConfig {
 class BL0942 {
 public:
   using OnDataReceivedCallback = std::function<void(SensorData &data)>;
+  // ChannelSelector(channel, active): active==true -> select, false -> unselect
+  using ChannelSelector = std::function<void(uint8_t channel, bool active)>;
 
   enum InterfaceType : uint8_t { INTERFACE_UART = 0, INTERFACE_SPI = 1 };
 
   // UART constructor (default)
   BL0942(HardwareSerial &serial, uint8_t address = 0);
 
-  // SPI constructor: provide SPI instance and CS pin
-  BL0942(SPIClass &spi, uint8_t cs_pin, uint8_t address = 0);
+  // SPI constructor: provide SPI instance and optional CS pin. If the CS pin
+  // is omitted (default 0xFF) the library will not toggle a CS pin; the
+  // user can instead provide a custom ChannelSelector that performs channel
+  // selection (port extenders, muxes, etc.).
+  BL0942(SPIClass &spi, uint8_t cs_pin = 0xFF, uint8_t address = 0);
+  // Optional: provide a custom channel selector callback. If set, it will be
+  // invoked with the current `address_` before any command that targets a
+  // particular channel/device. This allows using port-extenders or alternate
+  // GPIO schemes to switch the target channel.
+  void setChannelSelector(ChannelSelector selector);
   void setup(const ModeConfig &config = ModeConfig{});
   void reset();
 
@@ -109,12 +119,18 @@ protected:
 
   HardwareSerial *serial_;
   SPIClass *spi_;
+  ChannelSelector channelSelector_ = nullptr;
   OnDataReceivedCallback dataCallback;
   uint8_t address_;
   uint8_t cs_pin_;
   InterfaceType interface_;
   bool use_delta_energy_;
   uint32_t prev_cf_cnt_ = 0;
+
+  // Optional channel selection callback helper
+  void ensure_channel_selected_(bool active);
+  // Helper to perform an SPI transfer (handles selection/unselection).
+  int spi_transfer_bytes(const uint8_t *tx, uint8_t *rx, size_t len);
 
   // transport helpers: these use the selected interface
   int read_reg_(uint8_t reg);
