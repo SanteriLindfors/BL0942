@@ -69,6 +69,9 @@ static const uint8_t BL0942_PACKET_HEADER = 0x55;
 
 static const uint8_t BL0942_WRITE_COMMAND = 0xA8;
 
+static const uint32_t BL0942_SPI_CLOCK_HZ = 900000;
+static const uint8_t BL0942_SPI_MODE = SPI_MODE1;
+
 static const uint8_t BL0942_REG_I_RMSOS = 0x12;
 static const uint8_t BL0942_REG_WA_CREEP = 0x14;
 static const uint8_t BL0942_REG_I_FAST_RMS_TH = 0x15;
@@ -91,7 +94,11 @@ BL0942::BL0942(HardwareSerial &serial, uint8_t address)
   : serial_(serial), spi_(nullptr), address_(address), cs_pin_(0), interface_(INTERFACE_UART) {}
 
 BL0942::BL0942(SPIClass &spi, uint8_t cs_pin, uint8_t address)
-  : serial_(*(HardwareSerial *)nullptr), spi_(&spi), address_(address), cs_pin_(cs_pin), interface_(INTERFACE_SPI) {}
+    : serial_(*(HardwareSerial *)nullptr), spi_(&spi), address_(address), cs_pin_(cs_pin), interface_(INTERFACE_SPI) {
+  // Ensure CS pin is configured high (inactive)
+  pinMode(cs_pin_, OUTPUT);
+  digitalWrite(cs_pin_, HIGH);
+}
 
 void BL0942::setup(const ModeConfig &config) {
   BL0942_LOGI(TAG, "Initializing BL0942 sensor...");
@@ -275,11 +282,14 @@ int BL0942::transport_read_(uint8_t *buf, size_t len) {
   } else {
     // SPI: perform a blocking transfer. CS active low
     if (!spi_) return -1;
+    SPISettings settings(BL0942_SPI_CLOCK_HZ, MSBFIRST, BL0942_SPI_MODE);
+    spi_->beginTransaction(settings);
     digitalWrite(cs_pin_, LOW);
     for (size_t i = 0; i < len; ++i) {
       buf[i] = spi_->transfer(0x00);
     }
     digitalWrite(cs_pin_, HIGH);
+    spi_->endTransaction();
     return (int)len;
   }
 }
@@ -290,11 +300,14 @@ void BL0942::transport_write_(const uint8_t *buf, size_t len) {
     serial_.flush();
   } else {
     if (!spi_) return;
+    SPISettings settings(BL0942_SPI_CLOCK_HZ, MSBFIRST, BL0942_SPI_MODE);
+    spi_->beginTransaction(settings);
     digitalWrite(cs_pin_, LOW);
     for (size_t i = 0; i < len; ++i) {
       spi_->transfer(buf[i]);
     }
     digitalWrite(cs_pin_, HIGH);
+    spi_->endTransaction();
   }
 }
 
