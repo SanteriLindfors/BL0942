@@ -107,7 +107,7 @@ protected:
     uint8_t checksum;
   } __attribute__((packed));
 
-  HardwareSerial &serial_;
+  HardwareSerial *serial_;
   SPIClass *spi_;
   OnDataReceivedCallback dataCallback;
   uint8_t address_;
