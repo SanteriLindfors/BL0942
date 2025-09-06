@@ -74,8 +74,8 @@ struct ModeConfig {
 class BL0942 {
 public:
   using OnDataReceivedCallback = std::function<void(SensorData &data)>;
-  // ChannelSelector(channel, active): active==true -> select, false -> unselect
-  using ChannelSelector = std::function<void(uint8_t channel, bool active)>;
+  // ChannelSelector(active): active==true -> select, false -> unselect
+  using ChannelSelector = std::function<void(bool active)>;
 
   enum InterfaceType : uint8_t { INTERFACE_UART = 0, INTERFACE_SPI = 1 };
 

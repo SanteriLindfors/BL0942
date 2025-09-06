@@ -136,7 +136,7 @@ void BL0942::setChannelSelector(ChannelSelector selector) {
 // Fully-qualified definition to avoid any lookup/mangling issues
 void bl0942::BL0942::ensure_channel_selected_(bool active) {
   if (channelSelector_) {
-    channelSelector_(address_, active);
+    channelSelector_(active);
   }
 }
 
