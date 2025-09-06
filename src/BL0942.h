@@ -85,8 +85,10 @@ public:
   // SPI constructor: provide SPI instance and optional CS pin. If the CS pin
   // is omitted (default 0xFF) the library will not toggle a CS pin; the
   // user can instead provide a custom ChannelSelector that performs channel
-  // selection (port extenders, muxes, etc.).
-  BL0942(SPIClass &spi, uint8_t cs_pin = 0xFF, uint8_t address = 0);
+  // selection (port extenders, muxes, etc.). Note: SPI transfers do not use
+  // the per-device "address" bit that UART commands use, so no address is
+  // required for SPI.
+  BL0942(SPIClass &spi, uint8_t cs_pin = 0xFF);
   // Optional: provide a custom channel selector callback. If set, it will be
   // invoked with the current `address_` before any command that targets a
   // particular channel/device. This allows using port-extenders or alternate

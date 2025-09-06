@@ -93,8 +93,8 @@ static const uint32_t BL0942_REG_USR_WRPROT_MAGIC = 0x55;
 BL0942::BL0942(HardwareSerial &serial, uint8_t address)
   : serial_(&serial), spi_(nullptr), address_(address), cs_pin_(0), interface_(INTERFACE_UART) {}
 
-BL0942::BL0942(SPIClass &spi, uint8_t cs_pin, uint8_t address)
-  : serial_(nullptr), spi_(&spi), address_(address), cs_pin_(cs_pin), interface_(INTERFACE_SPI) {
+BL0942::BL0942(SPIClass &spi, uint8_t cs_pin)
+  : serial_(nullptr), spi_(&spi), address_(0), cs_pin_(cs_pin), interface_(INTERFACE_SPI) {
   // If user provided a CS pin, configure it high (inactive). If cs_pin_ is
   // 0xFF we treat it as 'no CS managed' and leave selection to the
   // user-provided ChannelSelector.
@@ -163,7 +163,9 @@ bool BL0942::loop() {
       return false;
     }
   } else { // SPI
-  uint8_t tx[2] = { (uint8_t)(BL0942_READ_COMMAND | this->address_), BL0942_FULL_PACKET };
+    uint8_t tx[2];
+    tx[0] = (interface_ == INTERFACE_UART) ? (uint8_t)(BL0942_READ_COMMAND | this->address_) : BL0942_READ_COMMAND;
+    tx[1] = BL0942_FULL_PACKET;
     transport_write_(tx, 2);
     if (transport_read_(reinterpret_cast<uint8_t *>(&buffer), sizeof(buffer)) != (int)sizeof(buffer)) {
       BL0942_LOGW(TAG, "Failed to read the full data packet (SPI).");
@@ -184,7 +186,7 @@ bool BL0942::loop() {
 }
 
 bool BL0942::validate_checksum_(DataPacket *data) {
-  uint8_t checksum = BL0942_READ_COMMAND | this->address_;
+  uint8_t checksum = (interface_ == INTERFACE_UART) ? (uint8_t)(BL0942_READ_COMMAND | this->address_) : BL0942_READ_COMMAND;
   uint8_t *raw = reinterpret_cast<uint8_t *>(data);
   for (size_t i = 0; i < sizeof(*data) - 1; i++) {
     checksum += raw[i];
@@ -241,19 +243,27 @@ void BL0942::onDataReceived(OnDataReceivedCallback callback) {
 }
 
 void BL0942::update() {
-  uint8_t tx[2] = { (uint8_t)(BL0942_READ_COMMAND | this->address_), BL0942_FULL_PACKET };
+  uint8_t tx[2];
+  // Include address bit only for UART interface; SPI sample does not use
+  // per-device address bits.
+  if (interface_ == INTERFACE_UART) {
+    tx[0] = (uint8_t)(BL0942_READ_COMMAND | this->address_);
+  } else {
+    tx[0] = BL0942_READ_COMMAND;
+  }
+  tx[1] = BL0942_FULL_PACKET;
   transport_write_(tx, sizeof(tx));
 }
 
 void BL0942::write_reg_(uint8_t reg, uint32_t val) {
   uint8_t pkt[6];
-
-  pkt[0] = BL0942_WRITE_COMMAND | this->address_;
+  // First byte is the write command; include address only for UART
+  pkt[0] = (interface_ == INTERFACE_UART) ? (uint8_t)(BL0942_WRITE_COMMAND | this->address_) : BL0942_WRITE_COMMAND;
   pkt[1] = reg;
   pkt[2] = (val & 0xff);
   pkt[3] = (val >> 8) & 0xff;
   pkt[4] = (val >> 16) & 0xff;
-  pkt[5] = (pkt[0] + pkt[1] + pkt[2] + pkt[3] + pkt[4]) ^ 0xff;
+  pkt[5] = (uint8_t)(((uint16_t)pkt[0] + pkt[1] + pkt[2] + pkt[3] + pkt[4]) ^ 0xff);
 
   BL0942_LOGD(TAG, "Writing value 0x%02X to register 0x%02X", val, reg);
 
@@ -270,15 +280,16 @@ int BL0942::read_reg_(uint8_t reg) {
     uint32_t le32;
   } resp;
 
-  uint8_t tx[2] = { (uint8_t)(BL0942_READ_COMMAND | this->address_), reg };
+  uint8_t tx[2];
+  tx[0] = (interface_ == INTERFACE_UART) ? (uint8_t)(BL0942_READ_COMMAND | this->address_) : BL0942_READ_COMMAND;
+  tx[1] = reg;
   transport_write_(tx, 2);
 
   int bytesRead = transport_read_(resp.b, 4);
 
   if (bytesRead == 4) {
-  if (resp.b[3] == (uint8_t)((((uint8_t)(BL0942_READ_COMMAND + this->address_ + reg) +
-                resp.b[0] + resp.b[1] + resp.b[2]) ^
-                 0xff))) {
+    uint8_t base = (interface_ == INTERFACE_UART) ? (uint8_t)(BL0942_READ_COMMAND + this->address_ + reg) : (uint8_t)(BL0942_READ_COMMAND + reg);
+    if (resp.b[3] == (uint8_t)(((base + resp.b[0] + resp.b[1] + resp.b[2]) ^ 0xff))) {
       resp.b[3] = 0;
       return resp.le32;
     } else {
