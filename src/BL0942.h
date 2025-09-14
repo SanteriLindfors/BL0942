@@ -56,7 +56,7 @@ enum AccumulationMode : uint8_t {
 };
 
 enum UartRate : uint8_t {
-  UART_RATE_4800 = 0x00,  // 4800bps
+  SPI_OR_UART_RATE_4800 = 0x00,  // 4800bps
   UART_RATE_9600 = 0x01,  // 9600bps
   UART_RATE_19200 = 0x02, // 19200bps
   UART_RATE_38400 = 0x03  // 38400bps
@@ -68,7 +68,7 @@ struct ModeConfig {
   LineFrequency ac_freq = LINE_FREQUENCY_50HZ;
   ClearMode clear_mode = CNT_CLR_SEL_DISABLE;
   AccumulationMode accumulation_mode = ACCUMULATION_MODE_ABSOLUTE;
-  UartRate uart_rate = UART_RATE_4800;
+  UartRate uart_rate = SPI_OR_UART_RATE_4800;
 };
 
 class BL0942 {
@@ -131,6 +131,8 @@ protected:
 
   // Optional channel selection callback helper
   void ensure_channel_selected_(bool active);
+  void start_transaction_();
+  void end_transaction_();
   // Helper to perform an SPI transfer (handles selection/unselection).
   int spi_transfer_bytes(const uint8_t *tx, uint8_t *rx, size_t len);
 
