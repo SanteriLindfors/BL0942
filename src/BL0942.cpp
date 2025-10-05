@@ -42,13 +42,14 @@
   } while (0)
 
 // DEBUG logs are disabled for non-ESP32
-#define BL0942_LOGD(tag, fmt, ...)                                             \
-  do {                                                                         \
-    char buf[128];                                                             \
-    snprintf(buf, sizeof(buf), fmt, ##__VA_ARGS__);                            \
-    Serial.print("[DEBUG] ");                                                  \
-    Serial.println(buf);                                                       \
-  } while (0)
+#define BL0942_LOGD(tag, fmt, ...)
+// #define BL0942_LOGD(tag, fmt, ...)                                             \
+//   do {                                                                         \
+//     char buf[128];                                                             \
+//     snprintf(buf, sizeof(buf), fmt, ##__VA_ARGS__);                            \
+//     Serial.print("[DEBUG] ");                                                  \
+//     Serial.println(buf);                                                       \
+//   } while (0)
 
 #endif
 
@@ -227,7 +228,7 @@ bool BL0942::loop() {
     buffer.frequency = read_reg_(BL0942_REG_FREQ);
     buffer.status = read_reg_(BL0942_REG_STATUS);
 
-    BL0942_LOGI(
+    BL0942_LOGD(
       TAG,
       "Received register values: I_RMS: 0x%02X, V_RMS: 0x%02X, I_FAST_RMS: 0x%02X, WATT: 0x%02X, CF_CNT: 0x%02X, FREQ: 0x%02X, STATUS: 0x%02X",
       buffer.i_rms, buffer.v_rms, buffer.i_fast_rms, buffer.watt, buffer.cf_cnt, buffer.frequency, buffer.status);
@@ -280,7 +281,7 @@ void BL0942::received_package_(DataPacket *data) {
   sensorData.energy = cf_cnt / BL0942_EREF;
   sensorData.frequency = 1000000.0f / data->frequency;
 
-  BL0942_LOGI(TAG,
+  BL0942_LOGD(TAG,
               "BL0942: U %fV, I %fA, P %fW, Cnt %lu, %s %fkWh, "
               "freq %fHz, status 0x%08X",
               sensorData.voltage, sensorData.current, sensorData.watt,
