@@ -42,7 +42,9 @@
   } while (0)
 
 // DEBUG logs are disabled for non-ESP32
-#define BL0942_LOGD(tag, fmt, ...)
+#define BL0942_LOGD(tag, fmt, ...)                                             \
+  do {                                                                         \
+  } while (0)
 // #define BL0942_LOGD(tag, fmt, ...)                                             \
 //   do {                                                                         \
 //     char buf[128];                                                             \
@@ -155,7 +157,6 @@ void BL0942::setChannelSelector(ChannelSelector selector) {
   channelSelector_ = selector;
 }
 
-// Fully-qualified definition to avoid any lookup/mangling issues
 void bl0942::BL0942::ensure_channel_selected_(bool active) {
   if (channelSelector_)
     channelSelector_(active);
