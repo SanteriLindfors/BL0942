@@ -94,6 +94,7 @@ public:
   // particular channel/device. This allows using port-extenders or alternate
   // GPIO schemes to switch the target channel.
   void setChannelSelector(ChannelSelector selector);
+  void setCalibration(float pRef, float uRef, float iRef, float eRef);
   void setup(const ModeConfig &config = ModeConfig{});
   void reset();
 
@@ -128,6 +129,11 @@ protected:
   InterfaceType interface_;
   bool use_delta_energy_;
   uint32_t prev_cf_cnt_ = 0;
+
+  float cal_pref_ = BL0942_PREF;
+  float cal_uref_ = BL0942_UREF;
+  float cal_iref_ = BL0942_IREF;
+  float cal_eref_ = BL0942_EREF;
 
   // Optional channel selection callback helper
   void ensure_channel_selected_(bool active);

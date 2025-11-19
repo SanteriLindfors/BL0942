@@ -157,6 +157,13 @@ void BL0942::setChannelSelector(ChannelSelector selector) {
   channelSelector_ = selector;
 }
 
+void BL0942::setCalibration(float pRef, float uRef, float iRef, float eRef) {
+    cal_pref_ = pRef;
+    cal_uref_ = uRef;
+    cal_iref_ = iRef;
+    cal_eref_ = eRef;
+}
+
 void bl0942::BL0942::ensure_channel_selected_(bool active) {
   if (channelSelector_)
     channelSelector_(active);
@@ -276,10 +283,10 @@ void BL0942::received_package_(DataPacket *data) {
   }
 
   SensorData sensorData;
-  sensorData.voltage = data->v_rms / BL0942_UREF;
-  sensorData.current = data->i_rms / BL0942_IREF;
-  sensorData.watt = abs(data->watt) / BL0942_PREF;
-  sensorData.energy = cf_cnt / BL0942_EREF;
+  sensorData.voltage = data->v_rms / cal_uref_;
+  sensorData.current = data->i_rms / cal_iref_;
+  sensorData.watt = abs(data->watt) / cal_pref_;
+  sensorData.energy = cf_cnt / cal_eref_;
   sensorData.frequency = 1000000.0f / data->frequency;
 
   BL0942_LOGD(TAG,
