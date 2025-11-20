@@ -285,7 +285,7 @@ void BL0942::received_package_(DataPacket *data) {
   SensorData sensorData;
   sensorData.voltage = data->v_rms / cal_uref_;
   sensorData.current = data->i_rms / cal_iref_;
-  sensorData.watt = abs(data->watt) / cal_pref_;
+  sensorData.watt = data->watt / cal_pref_;
   sensorData.energy = cf_cnt / cal_eref_;
   sensorData.frequency = 1000000.0f / data->frequency;
 
