@@ -45,6 +45,13 @@
 #define BL0942_LOGD(tag, fmt, ...)                                             \
   do {                                                                         \
   } while (0)
+// #define BL0942_LOGD(tag, fmt, ...)                                             \
+//   do {                                                                         \
+//     char buf[128];                                                             \
+//     snprintf(buf, sizeof(buf), fmt, ##__VA_ARGS__);                            \
+//     Serial.print("[DEBUG] ");                                                  \
+//     Serial.println(buf);                                                       \
+//   } while (0)
 
 #endif
 
@@ -69,6 +76,18 @@ static const uint8_t BL0942_PACKET_HEADER = 0x55;
 
 static const uint8_t BL0942_WRITE_COMMAND = 0xA8;
 
+static const uint32_t BL0942_SPI_CLOCK_HZ = 100000;
+static const uint8_t BL0942_SPI_MODE = SPI_MODE1;
+
+static const uint8_t BL0942_REG_I_WAVE = 0x01;
+static const uint8_t BL0942_REG_V_WAVE = 0x02;
+static const uint8_t BL0942_REG_I_RMS = 0x03;
+static const uint8_t BL0942_REG_V_RMS = 0x04;
+static const uint8_t BL0942_REG_I_FAST_RMS = 0x05;
+static const uint8_t BL0942_REG_WATT = 0x06;
+static const uint8_t BL0942_REG_CF_CNT = 0x07;
+static const uint8_t BL0942_REG_FREQ = 0x08;
+static const uint8_t BL0942_REG_STATUS = 0x09;
 static const uint8_t BL0942_REG_I_RMSOS = 0x12;
 static const uint8_t BL0942_REG_WA_CREEP = 0x14;
 static const uint8_t BL0942_REG_I_FAST_RMS_TH = 0x15;
@@ -88,12 +107,24 @@ static const uint32_t BL0942_REG_SOFT_RESET_MAGIC = 0x5a5a5a;
 static const uint32_t BL0942_REG_USR_WRPROT_MAGIC = 0x55;
 
 BL0942::BL0942(HardwareSerial &serial, uint8_t address)
-    : serial_(serial), address_(address_) {}
+  : serial_(&serial), spi_(nullptr), address_(address), cs_pin_(0), interface_(INTERFACE_UART) {}
+
+BL0942::BL0942(SPIClass &spi, uint8_t cs_pin)
+  : serial_(nullptr), spi_(&spi), address_(0), cs_pin_(cs_pin), interface_(INTERFACE_SPI) {
+  // If user provided a CS pin, configure it high (inactive). If cs_pin_ is
+  // 0xFF we treat it as 'no CS managed' and leave selection to the
+  // user-provided ChannelSelector.
+  if (cs_pin_ != 0xFF) {
+    pinMode(cs_pin_, OUTPUT);
+    digitalWrite(cs_pin_, HIGH);
+  }
+}
 
 void BL0942::setup(const ModeConfig &config) {
   BL0942_LOGI(TAG, "Initializing BL0942 sensor...");
   use_delta_energy_ = config.clear_mode == CNT_CLR_SEL_ENABLE ? true : false;
 
+  start_transaction_();
   write_reg_(BL0942_REG_USR_WRPROT, BL0942_REG_USR_WRPROT_MAGIC);
 
   uint32_t mode = BL0942_REG_MODE_DEFAULT;
@@ -106,53 +137,124 @@ void BL0942::setup(const ModeConfig &config) {
 
   write_reg_(BL0942_REG_MODE, mode);
 
-  if (read_reg_(BL0942_REG_MODE) != mode) {
+  uint32_t mode_check = read_reg_(BL0942_REG_MODE);
+  BL0942_LOGD(
+    TAG,
+    "mode: %u, mode_check: %u",
+    mode, mode_check);
+
+  if (mode_check != mode) {
     BL0942_LOGE(TAG, "BL0942 setup failed!");
   } else {
     BL0942_LOGI(TAG, "BL0942 sensor initialized.");
   }
 
   write_reg_(BL0942_REG_USR_WRPROT, 0);
+  end_transaction_();
+}
+
+void BL0942::setChannelSelector(ChannelSelector selector) {
+  channelSelector_ = selector;
+}
+
+void BL0942::setCalibration(float pRef, float uRef, float iRef, float eRef) {
+    cal_pref_ = pRef;
+    cal_uref_ = uRef;
+    cal_iref_ = iRef;
+    cal_eref_ = eRef;
+}
+
+void bl0942::BL0942::ensure_channel_selected_(bool active) {
+  if (channelSelector_)
+    channelSelector_(active);
+  else
+    digitalWrite(cs_pin_, active ? LOW : HIGH);
+}
+
+void BL0942::start_transaction_() {
+  if (interface_ == INTERFACE_UART)
+    return;
+
+  ensure_channel_selected_(true);
+  SPISettings settings(BL0942_SPI_CLOCK_HZ, MSBFIRST, BL0942_SPI_MODE);
+  spi_->beginTransaction(settings);
+}
+
+void BL0942::end_transaction_() {
+  if (interface_ == INTERFACE_UART)
+    return;
+
+  spi_->endTransaction();
+  ensure_channel_selected_(false);
 }
 
 void BL0942::reset() {
-  BL0942_LOGI(TAG, "Resetting BL0942 sensor...");
-
-  write_reg_(BL0942_REG_USR_WRPROT, BL0942_REG_USR_WRPROT_MAGIC);
+  BL0942_LOGI(TAG, "Resetting BL0942 sensor (soft reset)...");
+  start_transaction_();
+  // Trigger soft reset via register write
   write_reg_(BL0942_REG_SOFT_RESET, BL0942_REG_SOFT_RESET_MAGIC);
+  end_transaction_();
+  // small delay to allow device to reset
+  delay(10);
 }
 
 bool BL0942::loop() {
   DataPacket buffer;
-  int avail = serial_.available();
 
-  if (avail < sizeof(buffer)) {
-    return false;
-  }
+  if (interface_ == INTERFACE_UART) {
+    int avail = serial_->available();
+    if (avail < (int)sizeof(buffer)) {
+      return false;
+    }
 
-  if (serial_.readBytes(reinterpret_cast<uint8_t *>(&buffer), sizeof(buffer)) ==
-      sizeof(buffer)) {
+    if (serial_->readBytes(reinterpret_cast<uint8_t *>(&buffer), sizeof(buffer)) != (int)sizeof(buffer)) {
+      BL0942_LOGW(TAG, "Failed to read the full data packet.");
+      return false;
+    }
+
     BL0942_LOGD(TAG, "Received data packet, validating checksum...");
+
     if (validate_checksum_(&buffer)) {
       BL0942_LOGD(TAG, "Checksum valid, processing data...");
       received_package_(&buffer);
       return true;
     } else {
       BL0942_LOGW(TAG, "Checksum invalid, ignoring packet.");
+      return false;
     }
-  } else {
-    BL0942_LOGW(TAG, "Failed to read the full data packet.");
+  } else { // SPI
+    // for SPI we need to get the data from the individual registers
+
+    start_transaction_();
+
+    buffer.frame_header = BL0942_PACKET_HEADER; // set fixed header for SPI
+    buffer.i_rms = read_reg_(BL0942_REG_I_RMS);
+    buffer.v_rms = read_reg_(BL0942_REG_V_RMS);
+    buffer.i_fast_rms = read_reg_(BL0942_REG_I_FAST_RMS);
+    buffer.watt = read_reg_(BL0942_REG_WATT);
+    buffer.cf_cnt = read_reg_(BL0942_REG_CF_CNT);
+    buffer.frequency = read_reg_(BL0942_REG_FREQ);
+    buffer.status = read_reg_(BL0942_REG_STATUS);
+
+    BL0942_LOGD(
+      TAG,
+      "Received register values: I_RMS: 0x%02X, V_RMS: 0x%02X, I_FAST_RMS: 0x%02X, WATT: 0x%02X, CF_CNT: 0x%02X, FREQ: 0x%02X, STATUS: 0x%02X",
+      buffer.i_rms, buffer.v_rms, buffer.i_fast_rms, buffer.watt, buffer.cf_cnt, buffer.frequency, buffer.status);
+
+    end_transaction_();
   }
-  return false;
+
+  received_package_(&buffer);
+  return true;
 }
 
 bool BL0942::validate_checksum_(DataPacket *data) {
-  uint8_t checksum = BL0942_READ_COMMAND | this->address_;
+  uint32_t temp = (interface_ == INTERFACE_UART) ? (uint8_t)(BL0942_READ_COMMAND | this->address_) : BL0942_READ_COMMAND;
   uint8_t *raw = reinterpret_cast<uint8_t *>(data);
   for (size_t i = 0; i < sizeof(*data) - 1; i++) {
-    checksum += raw[i];
+    temp += raw[i];
   }
-  checksum ^= 0xFF;
+  uint8_t checksum = ~(temp & 0xFF);
 
   if (checksum != data->checksum) {
     BL0942_LOGW(TAG, "Invalid checksum! Expected: 0x%02X, Got: 0x%02X",
@@ -181,13 +283,13 @@ void BL0942::received_package_(DataPacket *data) {
   }
 
   SensorData sensorData;
-  sensorData.voltage = data->v_rms / BL0942_UREF;
-  sensorData.current = data->i_rms / BL0942_IREF;
-  sensorData.watt = data->watt / BL0942_PREF;
-  sensorData.energy = cf_cnt / BL0942_EREF;
+  sensorData.voltage = data->v_rms / cal_uref_;
+  sensorData.current = data->i_rms / cal_iref_;
+  sensorData.watt = data->watt / cal_pref_;
+  sensorData.energy = cf_cnt / cal_eref_;
   sensorData.frequency = 1000000.0f / data->frequency;
 
-  BL0942_LOGI(TAG,
+  BL0942_LOGD(TAG,
               "BL0942: U %fV, I %fA, P %fW, Cnt %lu, %s %fkWh, "
               "freq %fHz, status 0x%08X",
               sensorData.voltage, sensorData.current, sensorData.watt,
@@ -204,20 +306,33 @@ void BL0942::onDataReceived(OnDataReceivedCallback callback) {
 }
 
 void BL0942::update() {
-  serial_.write(BL0942_READ_COMMAND | this->address_);
-  serial_.write(BL0942_FULL_PACKET);
-  serial_.flush();
+  // get summary information is not supported by SPI, so nothing to "update" here
+  if (interface_ != INTERFACE_UART)
+    return;
+
+  uint8_t tx[2];
+  tx[0] = (uint8_t)(BL0942_READ_COMMAND | this->address_);
+  tx[1] = BL0942_FULL_PACKET;
+
+  BL0942_LOGD(
+    TAG,
+    "Packet to be sent: [0x%02X, 0x%02X]",
+    tx[0], tx[1]);
+
+  start_transaction_();
+  transport_write_(tx, 2);
+  end_transaction_();
 }
 
 void BL0942::write_reg_(uint8_t reg, uint32_t val) {
   uint8_t pkt[6];
-
-  pkt[0] = BL0942_WRITE_COMMAND | this->address_;
+  // First byte is the write command; include address only for UART
+  pkt[0] = (interface_ == INTERFACE_UART) ? (uint8_t)(BL0942_WRITE_COMMAND | this->address_) : BL0942_WRITE_COMMAND;
   pkt[1] = reg;
   pkt[2] = (val & 0xff);
   pkt[3] = (val >> 8) & 0xff;
   pkt[4] = (val >> 16) & 0xff;
-  pkt[5] = (pkt[0] + pkt[1] + pkt[2] + pkt[3] + pkt[4]) ^ 0xff;
+  pkt[5] = (uint8_t)(~(((uint32_t)pkt[0] + pkt[1] + pkt[2] + pkt[3] + pkt[4]) & 0xff));
 
   BL0942_LOGD(TAG, "Writing value 0x%02X to register 0x%02X", val, reg);
 
@@ -225,8 +340,7 @@ void BL0942::write_reg_(uint8_t reg, uint32_t val) {
       TAG,
       "Packet to be sent: [0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X]",
       pkt[0], pkt[1], pkt[2], pkt[3], pkt[4], pkt[5]);
-  serial_.write(pkt, 6);
-  serial_.flush();
+  transport_write_(pkt, 6);
 }
 
 int BL0942::read_reg_(uint8_t reg) {
@@ -235,18 +349,42 @@ int BL0942::read_reg_(uint8_t reg) {
     uint32_t le32;
   } resp;
 
-  serial_.write(BL0942_READ_COMMAND | this->address_);
-  serial_.write(reg);
-  serial_.flush();
+  uint8_t tx[2];
+  tx[0] = (interface_ == INTERFACE_UART) ? (uint8_t)(BL0942_READ_COMMAND | this->address_) : BL0942_READ_COMMAND;
+  tx[1] = reg;
 
-  int bytesRead = serial_.readBytes(resp.b, 4);
+  BL0942_LOGD(TAG, "Reading value of register 0x%02X", reg);
+
+  BL0942_LOGD(
+      TAG,
+      "Packet to be sent: [0x%02X, 0x%02X]",
+      tx[0], tx[1]);
+  transport_write_(tx, 2);
+
+  int bytesRead = transport_read_(resp.b, 4);
 
   if (bytesRead == 4) {
-    if (resp.b[3] == (uint8_t)((BL0942_READ_COMMAND + this->address_ + reg +
-                                resp.b[0] + resp.b[1] + resp.b[2]) ^
-                               0xff)) {
-      resp.b[3] = 0;
-      return resp.le32;
+    BL0942_LOGD(
+        TAG,
+        "Packet received: [0x%02X, 0x%02X, 0x%02X, 0x%02X]",
+        resp.b[0], resp.b[1], resp.b[2], resp.b[3]);
+
+    uint32_t base = (interface_ == INTERFACE_UART) ? (uint32_t)(BL0942_READ_COMMAND + this->address_ + reg) : (uint32_t)(BL0942_READ_COMMAND + reg);
+    if (resp.b[3] == (uint8_t)(~((base + resp.b[0] + resp.b[1] + resp.b[2]) & 0xff))) {
+      //resp.b[3] = 0;
+
+      int32_t reg_val = 0;
+      if (interface_ == INTERFACE_UART) {
+        reg_val |= resp.b[0];
+        reg_val |= resp.b[1] << 8;
+        reg_val |= resp.b[2] << 16;
+      } else {
+        reg_val |= resp.b[2];
+        reg_val |= resp.b[1] << 8;
+        reg_val |= resp.b[0] << 16;
+      }
+
+      return reg_val;
     } else {
       BL0942_LOGE(TAG, "Checksum invalid");
     }
@@ -257,7 +395,34 @@ int BL0942::read_reg_(uint8_t reg) {
   return -1;
 }
 
+int BL0942::transport_read_(uint8_t *buf, size_t len) {
+  BL0942_LOGD(TAG, "Reading %u bytes...", len);
+  if (interface_ == INTERFACE_UART) {
+    return serial_->readBytes(buf, len);
+  } else {
+    if (!spi_) return -1;
+    for (size_t i = 0; i < len; ++i) {
+      buf[i] = spi_->transfer(0x00);
+    }
+    return (int)len;
+  }
+}
+
+void BL0942::transport_write_(const uint8_t *buf, size_t len) {
+  if (interface_ == INTERFACE_UART) {
+    serial_->write(buf, len);
+    serial_->flush();
+  } else {
+    if (!spi_) return;
+    for (size_t i = 0; i < len; ++i) {
+      spi_->transfer(buf[i]);
+    }
+  }
+}
+
 void BL0942::print_registers() {
+  start_transaction_();
+
   // Read I_RMSOS (address 0x12)
   int i_rmsos = read_reg_(BL0942_REG_I_RMSOS);
   if (i_rmsos != -1) {
@@ -362,6 +527,8 @@ void BL0942::print_registers() {
   } else {
     BL0942_LOGW(TAG, "Failed to read USR_WRPROT register");
   }
+
+  end_transaction_();
 }
 
 } // namespace bl0942

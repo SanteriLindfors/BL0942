@@ -7,6 +7,8 @@ UART.
 #pragma once
 
 #include <Arduino.h>
+#include <functional>
+#include <SPI.h>
 
 namespace bl0942 {
 
@@ -54,7 +56,7 @@ enum AccumulationMode : uint8_t {
 };
 
 enum UartRate : uint8_t {
-  UART_RATE_4800 = 0x00,  // 4800bps
+  SPI_OR_UART_RATE_4800 = 0x00,  // 4800bps
   UART_RATE_9600 = 0x01,  // 9600bps
   UART_RATE_19200 = 0x02, // 19200bps
   UART_RATE_38400 = 0x03  // 38400bps
@@ -66,14 +68,33 @@ struct ModeConfig {
   LineFrequency ac_freq = LINE_FREQUENCY_50HZ;
   ClearMode clear_mode = CNT_CLR_SEL_DISABLE;
   AccumulationMode accumulation_mode = ACCUMULATION_MODE_ABSOLUTE;
-  UartRate uart_rate = UART_RATE_4800;
+  UartRate uart_rate = SPI_OR_UART_RATE_4800;
 };
 
 class BL0942 {
 public:
   using OnDataReceivedCallback = std::function<void(SensorData &data)>;
+  // ChannelSelector(active): active==true -> select, false -> unselect
+  using ChannelSelector = std::function<void(bool active)>;
 
+  enum InterfaceType : uint8_t { INTERFACE_UART = 0, INTERFACE_SPI = 1 };
+
+  // UART constructor (default)
   BL0942(HardwareSerial &serial, uint8_t address = 0);
+
+  // SPI constructor: provide SPI instance and optional CS pin. If the CS pin
+  // is omitted (default 0xFF) the library will not toggle a CS pin; the
+  // user can instead provide a custom ChannelSelector that performs channel
+  // selection (port extenders, muxes, etc.). Note: SPI transfers do not use
+  // the per-device "address" bit that UART commands use, so no address is
+  // required for SPI.
+  BL0942(SPIClass &spi, uint8_t cs_pin = 0xFF);
+  // Optional: provide a custom channel selector callback. If set, it will be
+  // invoked with the current `address_` before any command that targets a
+  // particular channel/device. This allows using port-extenders or alternate
+  // GPIO schemes to switch the target channel.
+  void setChannelSelector(ChannelSelector selector);
+  void setCalibration(float pRef, float uRef, float iRef, float eRef);
   void setup(const ModeConfig &config = ModeConfig{});
   void reset();
 
@@ -99,13 +120,32 @@ protected:
     uint8_t checksum;
   } __attribute__((packed));
 
-  HardwareSerial &serial_;
+  HardwareSerial *serial_;
+  SPIClass *spi_;
+  ChannelSelector channelSelector_ = nullptr;
   OnDataReceivedCallback dataCallback;
   uint8_t address_;
+  uint8_t cs_pin_;
+  InterfaceType interface_;
   bool use_delta_energy_;
   uint32_t prev_cf_cnt_ = 0;
 
+  float cal_pref_ = BL0942_PREF;
+  float cal_uref_ = BL0942_UREF;
+  float cal_iref_ = BL0942_IREF;
+  float cal_eref_ = BL0942_EREF;
+
+  // Optional channel selection callback helper
+  void ensure_channel_selected_(bool active);
+  void start_transaction_();
+  void end_transaction_();
+  // Helper to perform an SPI transfer (handles selection/unselection).
+  int spi_transfer_bytes(const uint8_t *tx, uint8_t *rx, size_t len);
+
+  // transport helpers: these use the selected interface
   int read_reg_(uint8_t reg);
+  int transport_read_(uint8_t *buf, size_t len);
+  void transport_write_(const uint8_t *buf, size_t len);
   void write_reg_(uint8_t reg, uint32_t val);
   bool validate_checksum_(DataPacket *data);
   void received_package_(DataPacket *data);
