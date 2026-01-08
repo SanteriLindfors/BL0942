@@ -84,21 +84,6 @@ public:
   void print_registers();
 
 protected:
-  struct DataPacket {
-    uint8_t frame_header;
-    uint32_t i_rms : 24;
-    uint32_t v_rms : 24;
-    uint32_t i_fast_rms : 24;
-    int32_t watt : 24;
-    uint32_t cf_cnt : 24;
-    uint16_t frequency;
-    uint8_t reserved1;
-    uint8_t status;
-    uint8_t reserved2;
-    uint8_t reserved3;
-    uint8_t checksum;
-  } __attribute__((packed));
-
   HardwareSerial &serial_;
   OnDataReceivedCallback dataCallback;
   uint8_t address_;
@@ -107,7 +92,7 @@ protected:
 
   int read_reg_(uint8_t reg);
   void write_reg_(uint8_t reg, uint32_t val);
-  bool validate_checksum_(DataPacket *data);
-  void received_package_(DataPacket *data);
+  bool validate_checksum_(const uint8_t *frame, size_t len);
+  void received_package_(const uint8_t *frame, size_t len);
 };
 } // namespace bl0942

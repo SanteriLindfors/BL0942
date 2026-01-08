@@ -1,63 +1,51 @@
-#include "bl0942.h"
+#include "BL0942.h"
 #include <cinttypes>
+#include <cmath>
 
 #define DEBUG 1
 
 #if DEBUG
 
-// ESP32 platform
 #if defined(ESP32)
 #include <esp_log.h>
 #define BL0942_LOGI(tag, fmt, ...) ESP_LOGI(tag, fmt, ##__VA_ARGS__)
 #define BL0942_LOGD(tag, fmt, ...) ESP_LOGD(tag, fmt, ##__VA_ARGS__)
 #define BL0942_LOGW(tag, fmt, ...) ESP_LOGW(tag, fmt, ##__VA_ARGS__)
 #define BL0942_LOGE(tag, fmt, ...) ESP_LOGE(tag, fmt, ##__VA_ARGS__)
-
-// Non-ESP32 (e.g., AVR, STM32)
 #else
-#include <cstdio> // for snprintf
-
+#include <cstdio>
 #define BL0942_LOGI(tag, fmt, ...)                                             \
   do {                                                                         \
-    char buf[128];                                                             \
-    snprintf(buf, sizeof(buf), fmt, ##__VA_ARGS__);                            \
+    char b[128];                                                               \
+    snprintf(b, sizeof(b), fmt, ##__VA_ARGS__);                                \
     Serial.print("[INFO] ");                                                   \
-    Serial.println(buf);                                                       \
+    Serial.println(b);                                                         \
   } while (0)
-
 #define BL0942_LOGW(tag, fmt, ...)                                             \
   do {                                                                         \
-    char buf[128];                                                             \
-    snprintf(buf, sizeof(buf), fmt, ##__VA_ARGS__);                            \
+    char b[128];                                                               \
+    snprintf(b, sizeof(b), fmt, ##__VA_ARGS__);                                \
     Serial.print("[WARN] ");                                                   \
-    Serial.println(buf);                                                       \
+    Serial.println(b);                                                         \
   } while (0)
-
 #define BL0942_LOGE(tag, fmt, ...)                                             \
   do {                                                                         \
-    char buf[128];                                                             \
-    snprintf(buf, sizeof(buf), fmt, ##__VA_ARGS__);                            \
+    char b[128];                                                               \
+    snprintf(b, sizeof(b), fmt, ##__VA_ARGS__);                                \
     Serial.print("[ERROR] ");                                                  \
-    Serial.println(buf);                                                       \
+    Serial.println(b);                                                         \
   } while (0)
-
-// DEBUG logs are disabled for non-ESP32
 #define BL0942_LOGD(tag, fmt, ...)                                             \
   do {                                                                         \
   } while (0)
-
 #endif
 
 #else
-// DEBUG == 0, disable all logging
 #define BL0942_LOGI(tag, fmt, ...)
 #define BL0942_LOGD(tag, fmt, ...)
 #define BL0942_LOGW(tag, fmt, ...)
 #define BL0942_LOGE(tag, fmt, ...)
 #endif
-
-// Datasheet:
-// https://www.belling.com.cn/media/file_object/bel_product/BL0942/datasheet/BL0942_V1.06_en.pdf
 
 namespace bl0942 {
 
@@ -66,7 +54,6 @@ static const char *const TAG = "bl0942";
 static const uint8_t BL0942_READ_COMMAND = 0x58;
 static const uint8_t BL0942_FULL_PACKET = 0xAA;
 static const uint8_t BL0942_PACKET_HEADER = 0x55;
-
 static const uint8_t BL0942_WRITE_COMMAND = 0xA8;
 
 static const uint8_t BL0942_REG_I_RMSOS = 0x12;
@@ -84,15 +71,46 @@ static const uint32_t BL0942_REG_MODE_RESV = 0x03;
 static const uint32_t BL0942_REG_MODE_CF_EN = 0x04;
 static const uint32_t BL0942_REG_MODE_DEFAULT =
     BL0942_REG_MODE_RESV | BL0942_REG_MODE_CF_EN;
+
 static const uint32_t BL0942_REG_SOFT_RESET_MAGIC = 0x5a5a5a;
 static const uint32_t BL0942_REG_USR_WRPROT_MAGIC = 0x55;
 
+// BL0942 "full packet" frame is 23 bytes:
+// 0:  0x55
+// 1-3:  I_RMS (24-bit LE)
+// 4-6:  V_RMS (24-bit LE)
+// 7-9:  I_FAST_RMS (24-bit LE)
+// 10-12: WATT (24-bit LE, signed)
+// 13-15: CF_CNT (24-bit LE)
+// 16-17: FREQ (16-bit LE)
+// 18: reserved
+// 19: status
+// 20: reserved
+// 21: reserved
+// 22: checksum
+static constexpr size_t BL0942_FRAME_SIZE = 23;
+
+static uint32_t u24le(const uint8_t *p) {
+  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
+}
+
+static int32_t s24le(const uint8_t *p) {
+  uint32_t v = u24le(p);
+  if (v & 0x00800000)
+    v |= 0xFF000000; // sign-extend 24->32
+  return (int32_t)v;
+}
+
+static uint16_t u16le(const uint8_t *p) {
+  return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
 BL0942::BL0942(HardwareSerial &serial, uint8_t address)
-    : serial_(serial), address_(address_) {}
+    : serial_(serial), address_(address) {}
 
 void BL0942::setup(const ModeConfig &config) {
   BL0942_LOGI(TAG, "Initializing BL0942 sensor...");
-  use_delta_energy_ = config.clear_mode == CNT_CLR_SEL_ENABLE ? true : false;
+  use_delta_energy_ = (config.clear_mode == CNT_CLR_SEL_ENABLE);
 
   write_reg_(BL0942_REG_USR_WRPROT, BL0942_REG_USR_WRPROT_MAGIC);
 
@@ -102,12 +120,14 @@ void BL0942::setup(const ModeConfig &config) {
   mode |= config.ac_freq;
   mode |= config.clear_mode;
   mode |= config.accumulation_mode;
-  mode |= (config.uart_rate << 8);
+  mode |= (uint32_t(config.uart_rate) << 8);
 
   write_reg_(BL0942_REG_MODE, mode);
 
-  if (read_reg_(BL0942_REG_MODE) != mode) {
-    BL0942_LOGE(TAG, "BL0942 setup failed!");
+  int readback = read_reg_(BL0942_REG_MODE);
+  if (readback != (int)mode) {
+    BL0942_LOGE(TAG, "BL0942 setup failed! wrote=0x%08" PRIX32 " read=0x%08X",
+                mode, readback);
   } else {
     BL0942_LOGI(TAG, "BL0942 sensor initialized.");
   }
@@ -117,86 +137,101 @@ void BL0942::setup(const ModeConfig &config) {
 
 void BL0942::reset() {
   BL0942_LOGI(TAG, "Resetting BL0942 sensor...");
-
   write_reg_(BL0942_REG_USR_WRPROT, BL0942_REG_USR_WRPROT_MAGIC);
   write_reg_(BL0942_REG_SOFT_RESET, BL0942_REG_SOFT_RESET_MAGIC);
 }
 
-bool BL0942::loop() {
-  DataPacket buffer;
-  int avail = serial_.available();
-
-  if (avail < sizeof(buffer)) {
+// checksum = ((READ|addr) + sum(frame[0..21])) ^ 0xFF
+bool BL0942::validate_checksum_(const uint8_t *frame, size_t len) {
+  if (!frame || len != BL0942_FRAME_SIZE)
     return false;
-  }
 
-  if (serial_.readBytes(reinterpret_cast<uint8_t *>(&buffer), sizeof(buffer)) ==
-      sizeof(buffer)) {
-    BL0942_LOGD(TAG, "Received data packet, validating checksum...");
-    if (validate_checksum_(&buffer)) {
-      BL0942_LOGD(TAG, "Checksum valid, processing data...");
-      received_package_(&buffer);
-      return true;
-    } else {
-      BL0942_LOGW(TAG, "Checksum invalid, ignoring packet.");
-    }
-  } else {
-    BL0942_LOGW(TAG, "Failed to read the full data packet.");
-  }
-  return false;
-}
-
-bool BL0942::validate_checksum_(DataPacket *data) {
-  uint8_t checksum = BL0942_READ_COMMAND | this->address_;
-  uint8_t *raw = reinterpret_cast<uint8_t *>(data);
-  for (size_t i = 0; i < sizeof(*data) - 1; i++) {
-    checksum += raw[i];
+  uint8_t checksum = (uint8_t)(BL0942_READ_COMMAND | this->address_);
+  for (size_t i = 0; i < len - 1; i++) {
+    checksum += frame[i];
   }
   checksum ^= 0xFF;
 
-  if (checksum != data->checksum) {
+  const uint8_t got = frame[len - 1];
+  if (checksum != got) {
     BL0942_LOGW(TAG, "Invalid checksum! Expected: 0x%02X, Got: 0x%02X",
-                checksum, data->checksum);
+                checksum, got);
     return false;
   }
-  return checksum == data->checksum;
+  return true;
 }
 
-void BL0942::received_package_(DataPacket *data) {
-  if (data->frame_header != BL0942_PACKET_HEADER) {
-    BL0942_LOGW(TAG,
-                "Invalid data. Header mismatch. Expected: 0x%02X, Got: 0x%02X",
-                BL0942_PACKET_HEADER, data->frame_header);
+void BL0942::received_package_(const uint8_t *f, size_t len) {
+  if (!f || len != BL0942_FRAME_SIZE)
+    return;
+  if (f[0] != BL0942_PACKET_HEADER) {
+    BL0942_LOGW(TAG, "Header mismatch. Expected 0x%02X, got 0x%02X",
+                BL0942_PACKET_HEADER, f[0]);
     return;
   }
 
-  uint32_t cf_cnt = data->cf_cnt & 0x00FFFFFF;
+  const uint32_t i_rms_raw = u24le(&f[1]);
+  const uint32_t v_rms_raw = u24le(&f[4]);
+  const uint32_t i_fast_raw = u24le(&f[7]);
+  (void)i_fast_raw;
+  const int32_t watt_raw = s24le(&f[10]);
+  uint32_t cf_cnt_raw = u24le(&f[13]);
+  const uint16_t freq_raw = u16le(&f[16]);
+  const uint8_t status = f[19];
 
+  // Extend 24-bit counter to monotonic 32-bit when in TOTAL mode
   if (!use_delta_energy_) {
-    cf_cnt |= this->prev_cf_cnt_ & 0xff000000;
-    if (cf_cnt < this->prev_cf_cnt_) {
-      cf_cnt += 0x1000000;
+    cf_cnt_raw |= (this->prev_cf_cnt_ & 0xFF000000);
+    if (cf_cnt_raw < this->prev_cf_cnt_) {
+      cf_cnt_raw += 0x01000000; // rollover
     }
-    this->prev_cf_cnt_ = cf_cnt;
+    this->prev_cf_cnt_ = cf_cnt_raw;
   }
 
-  SensorData sensorData;
-  sensorData.voltage = data->v_rms / BL0942_UREF;
-  sensorData.current = data->i_rms / BL0942_IREF;
-  sensorData.watt = data->watt / BL0942_PREF;
-  sensorData.energy = cf_cnt / BL0942_EREF;
-  sensorData.frequency = 1000000.0f / data->frequency;
+  SensorData d{};
+  d.voltage = (float)v_rms_raw / BL0942_UREF;
+  d.current = (float)i_rms_raw / BL0942_IREF;
+  d.watt = (float)watt_raw / BL0942_PREF;
+  d.energy = (float)cf_cnt_raw / BL0942_EREF;
+  d.frequency = (freq_raw != 0) ? (1000000.0f / (float)freq_raw) : 0.0f;
 
   BL0942_LOGI(TAG,
-              "BL0942: U %fV, I %fA, P %fW, Cnt %lu, %s %fkWh, "
-              "freq %fHz, status 0x%08X",
-              sensorData.voltage, sensorData.current, sensorData.watt,
-              data->cf_cnt, (use_delta_energy_ ? "ΔE" : "Total ∫P"),
-              sensorData.energy, sensorData.frequency, data->status);
+              "BL0942: U %.3fV, I %.4fA, P %.3fW, CF %lu, %s %.6fkWh, freq "
+              "%.3fHz, status 0x%02X "
+              "(raw: i=%lu v=%lu w=%ld cf=%lu f=%u)",
+              d.voltage, d.current, d.watt, (unsigned long)cf_cnt_raw,
+              (use_delta_energy_ ? "ΔE" : "Total"), d.energy, d.frequency,
+              status, (unsigned long)i_rms_raw, (unsigned long)v_rms_raw,
+              (long)watt_raw, (unsigned long)cf_cnt_raw, (unsigned)freq_raw);
 
-  if (dataCallback) {
-    dataCallback(sensorData);
+  if (dataCallback)
+    dataCallback(d);
+}
+
+bool BL0942::loop() {
+  // Resync to header 0x55
+  while (serial_.available() > 0) {
+    int b = serial_.peek();
+    if (b < 0)
+      return false;
+    if ((uint8_t)b == BL0942_PACKET_HEADER)
+      break;
+    serial_.read(); // discard garbage until header
   }
+
+  if (serial_.available() < (int)BL0942_FRAME_SIZE)
+    return false;
+
+  uint8_t frame[BL0942_FRAME_SIZE];
+  size_t n = serial_.readBytes(frame, BL0942_FRAME_SIZE);
+  if (n != BL0942_FRAME_SIZE)
+    return false;
+
+  if (!validate_checksum_(frame, BL0942_FRAME_SIZE))
+    return false;
+
+  received_package_(frame, BL0942_FRAME_SIZE);
+  return true;
 }
 
 void BL0942::onDataReceived(OnDataReceivedCallback callback) {
@@ -204,7 +239,7 @@ void BL0942::onDataReceived(OnDataReceivedCallback callback) {
 }
 
 void BL0942::update() {
-  serial_.write(BL0942_READ_COMMAND | this->address_);
+  serial_.write((uint8_t)(BL0942_READ_COMMAND | this->address_));
   serial_.write(BL0942_FULL_PACKET);
   serial_.flush();
 }
@@ -212,156 +247,65 @@ void BL0942::update() {
 void BL0942::write_reg_(uint8_t reg, uint32_t val) {
   uint8_t pkt[6];
 
-  pkt[0] = BL0942_WRITE_COMMAND | this->address_;
+  pkt[0] = (uint8_t)(BL0942_WRITE_COMMAND | this->address_);
   pkt[1] = reg;
-  pkt[2] = (val & 0xff);
-  pkt[3] = (val >> 8) & 0xff;
-  pkt[4] = (val >> 16) & 0xff;
-  pkt[5] = (pkt[0] + pkt[1] + pkt[2] + pkt[3] + pkt[4]) ^ 0xff;
+  pkt[2] = (uint8_t)(val & 0xFF);
+  pkt[3] = (uint8_t)((val >> 8) & 0xFF);
+  pkt[4] = (uint8_t)((val >> 16) & 0xFF);
+  pkt[5] = (uint8_t)((pkt[0] + pkt[1] + pkt[2] + pkt[3] + pkt[4]) ^ 0xFF);
 
-  BL0942_LOGD(TAG, "Writing value 0x%02X to register 0x%02X", val, reg);
-
-  BL0942_LOGD(
-      TAG,
-      "Packet to be sent: [0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X]",
-      pkt[0], pkt[1], pkt[2], pkt[3], pkt[4], pkt[5]);
+  BL0942_LOGD(TAG, "Write reg 0x%02X = 0x%06" PRIX32, reg, (val & 0x00FFFFFFu));
   serial_.write(pkt, 6);
   serial_.flush();
 }
 
 int BL0942::read_reg_(uint8_t reg) {
-  union {
-    uint8_t b[4];
-    uint32_t le32;
-  } resp;
+  uint8_t resp[4]{};
 
-  serial_.write(BL0942_READ_COMMAND | this->address_);
+  serial_.write((uint8_t)(BL0942_READ_COMMAND | this->address_));
   serial_.write(reg);
   serial_.flush();
 
-  int bytesRead = serial_.readBytes(resp.b, 4);
-
-  if (bytesRead == 4) {
-    if (resp.b[3] == (uint8_t)((BL0942_READ_COMMAND + this->address_ + reg +
-                                resp.b[0] + resp.b[1] + resp.b[2]) ^
-                               0xff)) {
-      resp.b[3] = 0;
-      return resp.le32;
-    } else {
-      BL0942_LOGE(TAG, "Checksum invalid");
-    }
-  } else {
-    BL0942_LOGE(TAG, "Failed to read enough bytes");
+  int bytesRead = serial_.readBytes(resp, 4);
+  if (bytesRead != 4) {
+    BL0942_LOGE(TAG, "Failed to read reg 0x%02X (read %d bytes)", reg,
+                bytesRead);
+    return -1;
   }
 
-  return -1;
+  const uint8_t expected = (uint8_t)((BL0942_READ_COMMAND | this->address_) +
+                                     reg + resp[0] + resp[1] + resp[2]) ^
+                           0xFF;
+  if (resp[3] != expected) {
+    BL0942_LOGE(TAG, "Reg 0x%02X checksum invalid (got 0x%02X exp 0x%02X)", reg,
+                resp[3], expected);
+    return -1;
+  }
+
+  // 24-bit value in resp[0..2], little-endian
+  return (int)((uint32_t)resp[0] | ((uint32_t)resp[1] << 8) |
+               ((uint32_t)resp[2] << 16));
 }
 
 void BL0942::print_registers() {
-  // Read I_RMSOS (address 0x12)
-  int i_rmsos = read_reg_(BL0942_REG_I_RMSOS);
-  if (i_rmsos != -1) {
-    BL0942_LOGI(TAG, "I_RMSOS Register Value: 0x%02X", i_rmsos);
-  } else {
-    BL0942_LOGW(TAG, "Failed to read I_RMSOS register");
-  }
+  auto dump = [&](const char *name, uint8_t reg) {
+    int v = read_reg_(reg);
+    if (v >= 0)
+      BL0942_LOGI(TAG, "%s (0x%02X) = 0x%06X", name, reg, v);
+    else
+      BL0942_LOGW(TAG, "Failed to read %s (0x%02X)", name, reg);
+  };
 
-  // Read WA_CREEP (address 0x14)
-  int wa_creep = read_reg_(BL0942_REG_WA_CREEP);
-  if (wa_creep != -1) {
-    BL0942_LOGI(TAG, "WA_CREEP Register Value: 0x%02X", wa_creep);
-  } else {
-    BL0942_LOGW(TAG, "Failed to read WA_CREEP register");
-  }
-
-  // Read I_FAST_RMS_TH (address 0x15)
-  int i_fast_rms_th = read_reg_(BL0942_REG_I_FAST_RMS_TH);
-  if (i_fast_rms_th != -1) {
-    BL0942_LOGI(TAG, "I_FAST_RMS_TH Register Value: 0x%02X", i_fast_rms_th);
-  } else {
-    BL0942_LOGW(TAG, "Failed to read I_FAST_RMS_TH register");
-  }
-
-  // Read I_FAST_RMS_CYC (address 0x16)
-  int i_fast_rms_cyc = read_reg_(BL0942_REG_I_FAST_RMS_CYC);
-  if (i_fast_rms_cyc != -1) {
-    BL0942_LOGI(TAG, "I_FAST_RMS_CYC Register Value: 0x%02X", i_fast_rms_cyc);
-  } else {
-    BL0942_LOGW(TAG, "Failed to read I_FAST_RMS_CYC register");
-  }
-
-  // Read FREQ_CYC (address 0x17)
-  int freq_cyc = read_reg_(BL0942_REG_FREQ_CYC);
-  if (freq_cyc != -1) {
-    BL0942_LOGI(TAG, "FREQ_CYC Register Value: 0x%02X", freq_cyc);
-  } else {
-    BL0942_LOGW(TAG, "Failed to read FREQ_CYC register");
-  }
-
-  // Read OT_FUNX (address 0x18)
-  int ot_funx = read_reg_(BL0942_REG_OT_FUNX);
-  if (ot_funx != -1) {
-    BL0942_LOGI(TAG, "OT_FUNX Register Value: 0x%02X", ot_funx);
-  } else {
-    BL0942_LOGW(TAG, "Failed to read OT_FUNX register");
-  }
-
-  // Read MODE (address 0x19)
-  int mode = read_reg_(BL0942_REG_MODE);
-  if (mode != -1) {
-    BL0942_LOGI(TAG, "MODE Register Value: 0x%02X", mode);
-
-    uint8_t cf_en = (mode >> 2) & 0x01;          // Bit 2
-    uint8_t rms_update_sel = (mode >> 3) & 0x01; // Bit 3
-    uint8_t fast_rms_sel = (mode >> 4) & 0x01;   // Bit 4
-    uint8_t ac_freq_sel = (mode >> 5) & 0x01;    // Bit 5
-    uint8_t cf_cnt_clr_sel = (mode >> 6) & 0x01; // Bit 6
-    uint8_t cf_cnt_add_sel = (mode >> 7) & 0x01; // Bit 7
-    uint8_t uart_rate_sel = (mode >> 8) & 0x03;  // Bits 8-9 (2 bits)
-
-    BL0942_LOGI(TAG, "CF_EN: %d (Active energy and pulse output enable)",
-                cf_en);
-    BL0942_LOGI(TAG, "RMS_UPDATE_SEL: %d (Refresh time for RMS)",
-                rms_update_sel);
-    BL0942_LOGI(TAG, "FAST_RMS_SEL: %d (Fast RMS waveform)", fast_rms_sel);
-    BL0942_LOGI(TAG, "AC_FREQ_SEL: %d (AC frequency selection)", ac_freq_sel);
-    BL0942_LOGI(TAG, "CF_CNT_CLR_SEL: %d (Clear after read of CF_CNT)",
-                cf_cnt_clr_sel);
-    BL0942_LOGI(TAG,
-                "CF_CNT_ADD_SEL: %d (Mode selection of active energy pulse "
-                "accumulation)",
-                cf_cnt_add_sel);
-    BL0942_LOGI(TAG,
-                "UART_RATE_SEL: %d (Baud rate selection: 0=4800bps, 1=9600bps, "
-                "2=19200bps, 3=38400bps)",
-                uart_rate_sel);
-  } else {
-    BL0942_LOGW(TAG, "Failed to read MODE register");
-  }
-
-  // Read GAIN_CR (address 0x1A)
-  int gain_cr = read_reg_(BL0942_REG_GAIN_CR);
-  if (gain_cr != -1) {
-    BL0942_LOGI(TAG, "GAIN_CR Register Value: 0x%02X", gain_cr);
-  } else {
-    BL0942_LOGW(TAG, "Failed to read GAIN_CR register");
-  }
-
-  // Read SOFT_RESET (address 0x1C)
-  int soft_reset = read_reg_(BL0942_REG_SOFT_RESET);
-  if (soft_reset != -1) {
-    BL0942_LOGI(TAG, "SOFT_RESET Register Value: 0x%02X", soft_reset);
-  } else {
-    BL0942_LOGW(TAG, "Failed to read SOFT_RESET register");
-  }
-
-  // Read USR_WRPROT (address 0x1D)
-  int usr_wrprot = read_reg_(BL0942_REG_USR_WRPROT);
-  if (usr_wrprot != -1) {
-    BL0942_LOGI(TAG, "USR_WRPROT Register Value: 0x%02X", usr_wrprot);
-  } else {
-    BL0942_LOGW(TAG, "Failed to read USR_WRPROT register");
-  }
+  dump("I_RMSOS", BL0942_REG_I_RMSOS);
+  dump("WA_CREEP", BL0942_REG_WA_CREEP);
+  dump("I_FAST_RMS_TH", BL0942_REG_I_FAST_RMS_TH);
+  dump("I_FAST_RMS_CYC", BL0942_REG_I_FAST_RMS_CYC);
+  dump("FREQ_CYC", BL0942_REG_FREQ_CYC);
+  dump("OT_FUNX", BL0942_REG_OT_FUNX);
+  dump("MODE", BL0942_REG_MODE);
+  dump("GAIN_CR", BL0942_REG_GAIN_CR);
+  dump("SOFT_RESET", BL0942_REG_SOFT_RESET);
+  dump("USR_WRPROT", BL0942_REG_USR_WRPROT);
 }
 
 } // namespace bl0942
