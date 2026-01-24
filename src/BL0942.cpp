@@ -2,9 +2,7 @@
 #include <cinttypes>
 #include <cmath>
 
-#define DEBUG 1
-
-#if DEBUG
+#if BL0942DEBUG
 
 #if defined(ESP32)
 #include <esp_log.h>
