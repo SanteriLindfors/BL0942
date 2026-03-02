@@ -16,21 +16,27 @@
   do {                                                                         \
     char b[128];                                                               \
     snprintf(b, sizeof(b), fmt, ##__VA_ARGS__);                                \
-    Serial.print("[INFO] ");                                                   \
+    Serial.print("[INFO] [");                                                  \
+    Serial.print(tag);                                                         \
+    Serial.print("] ");                                                        \
     Serial.println(b);                                                         \
   } while (0)
 #define BL0942_LOGW(tag, fmt, ...)                                             \
   do {                                                                         \
     char b[128];                                                               \
     snprintf(b, sizeof(b), fmt, ##__VA_ARGS__);                                \
-    Serial.print("[WARN] ");                                                   \
+    Serial.print("[WARN] [");                                                  \
+    Serial.print(tag);                                                         \
+    Serial.print("] ");                                                        \
     Serial.println(b);                                                         \
   } while (0)
 #define BL0942_LOGE(tag, fmt, ...)                                             \
   do {                                                                         \
     char b[128];                                                               \
     snprintf(b, sizeof(b), fmt, ##__VA_ARGS__);                                \
-    Serial.print("[ERROR] ");                                                  \
+    Serial.print("[ERROR] [");                                                 \
+    Serial.print(tag);                                                         \
+    Serial.print("] ");                                                        \
     Serial.println(b);                                                         \
   } while (0)
 #define BL0942_LOGD(tag, fmt, ...)                                             \
