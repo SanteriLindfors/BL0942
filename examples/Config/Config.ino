@@ -34,8 +34,17 @@ void setup() {
   // UART baud rate (MUST match Serial1.begin)
   config.uart_rate = bl0942::UART_RATE_4800;                // options: 4800, 9600, 19200, 38400
 
+  // Calibration references (optional, defaults are for Tongou DIN rail units)
+  // Override only the values you need — the rest keep their defaults
+  bl0942::CalibrationConfig calibration;
+  // calibration.voltage_reference = 15968.0f;
+  // calibration.current_reference = 124180.0f;
+  // calibration.power_reference   = 309.1f;
+  // calibration.energy_reference  = 2653.0f;
 
-  blSensor.setup(config);
+  if (!blSensor.setup(config, calibration)) {
+    Serial.println("BL0942 setup failed!");
+  }
   blSensor.onDataReceived(dataReceivedCallback);
 }
 

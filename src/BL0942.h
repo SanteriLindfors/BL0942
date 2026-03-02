@@ -10,13 +10,15 @@ UART.
 
 namespace bl0942 {
 
-// Calibration values
-// Currently set for Tongou DIN rail power meter unit
+// Calibration reference values
+// Defaults are set for Tongou DIN rail power meter unit
 // https://github.com/esphome/esphome-docs/blob/current/components/sensor/bl0942.rst
-static const float BL0942_PREF = 309.1;
-static const float BL0942_UREF = 15968;
-static const float BL0942_IREF = 124180;
-static const float BL0942_EREF = 2653;
+struct CalibrationConfig {
+  float power_reference   = 309.1f;
+  float voltage_reference = 15968.0f;
+  float current_reference = 124180.0f;
+  float energy_reference  = 2653.0f;
+};
 
 struct SensorData {
   float voltage;   // Voltage RMS
@@ -74,7 +76,8 @@ public:
   using OnDataReceivedCallback = std::function<void(SensorData &data)>;
 
   BL0942(HardwareSerial &serial, uint8_t address = 0);
-  void setup(const ModeConfig &config = ModeConfig{});
+  bool setup(const ModeConfig &config = ModeConfig{},
+             const CalibrationConfig &calibration = CalibrationConfig{});
   void reset();
 
   void onDataReceived(OnDataReceivedCallback);
@@ -85,9 +88,10 @@ public:
 
 protected:
   HardwareSerial &serial_;
-  OnDataReceivedCallback dataCallback;
+  OnDataReceivedCallback dataCallback = nullptr;
+  CalibrationConfig calibration_;
   uint8_t address_;
-  bool use_delta_energy_;
+  bool use_delta_energy_ = false;
   uint32_t prev_cf_cnt_ = 0;
 
   int read_reg_(uint8_t reg);

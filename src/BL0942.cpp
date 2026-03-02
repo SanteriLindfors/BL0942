@@ -106,8 +106,10 @@ static uint16_t u16le(const uint8_t *p) {
 BL0942::BL0942(HardwareSerial &serial, uint8_t address)
     : serial_(serial), address_(address) {}
 
-void BL0942::setup(const ModeConfig &config) {
+bool BL0942::setup(const ModeConfig &config,
+                   const CalibrationConfig &calibration) {
   BL0942_LOGI(TAG, "Initializing BL0942 sensor...");
+  calibration_ = calibration;
   use_delta_energy_ = (config.clear_mode == CNT_CLR_SEL_ENABLE);
 
   write_reg_(BL0942_REG_USR_WRPROT, BL0942_REG_USR_WRPROT_MAGIC);
@@ -123,7 +125,8 @@ void BL0942::setup(const ModeConfig &config) {
   write_reg_(BL0942_REG_MODE, mode);
 
   int readback = read_reg_(BL0942_REG_MODE);
-  if (readback != (int)mode) {
+  bool ok = (readback == (int)mode);
+  if (!ok) {
     BL0942_LOGE(TAG, "BL0942 setup failed! wrote=0x%08" PRIX32 " read=0x%08X",
                 mode, readback);
   } else {
@@ -131,6 +134,7 @@ void BL0942::setup(const ModeConfig &config) {
   }
 
   write_reg_(BL0942_REG_USR_WRPROT, 0);
+  return ok;
 }
 
 void BL0942::reset() {
@@ -187,10 +191,10 @@ void BL0942::received_package_(const uint8_t *f, size_t len) {
   }
 
   SensorData d{};
-  d.voltage = (float)v_rms_raw / BL0942_UREF;
-  d.current = (float)i_rms_raw / BL0942_IREF;
-  d.watt = (float)watt_raw / BL0942_PREF;
-  d.energy = (float)cf_cnt_raw / BL0942_EREF;
+  d.voltage = (float)v_rms_raw / calibration_.voltage_reference;
+  d.current = (float)i_rms_raw / calibration_.current_reference;
+  d.watt = (float)watt_raw / calibration_.power_reference;
+  d.energy = (float)cf_cnt_raw / calibration_.energy_reference;
   d.frequency = (freq_raw != 0) ? (1000000.0f / (float)freq_raw) : 0.0f;
 
   BL0942_LOGI(TAG,
